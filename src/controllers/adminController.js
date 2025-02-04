@@ -13,11 +13,9 @@ const adminRegisterSchema = z.object({
 	password: z
 		.string()
 		.min(6, { message: "Password must be at least 6 characters long" }),
-	confirmPassword: z
-		.string()
-		.min(6, {
-			message: "Confirm password must be at least 6 characters long",
-		}),
+	confirmPassword: z.string().min(6, {
+		message: "Confirm password must be at least 6 characters long",
+	}),
 	adminKey: z.string().min(1, { message: "Admin key is required" }),
 	role: z.enum(["Admin", "Super Admin", "Moderator"]),
 	permissions: z.array(z.string()).optional(),
@@ -281,6 +279,67 @@ export const logoutAdmin = async (req, res) => {
 	try {
 		res.clearCookie("token");
 		return sendResponse(res, 200, true, null, "Logged out successfully");
+	} catch (err) {
+		console.error(err);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Retrieve the profile of the logged-in admin
+export const getAdminProfile = async (req, res) => {
+	try {
+		const admin = await Admin.findById(req.user.id).select("-password");
+		if (!admin) {
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		return sendResponse(res, 200, true, admin, "Admin profile retrieved");
+	} catch (err) {
+		console.error(err);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Update the profile of the logged-in admin
+export const updateAdminProfile = async (req, res) => {
+	try {
+		const updateData = req.body;
+
+		// Hash the password if it is provided for update
+		if (updateData.password) {
+			const salt = await bcrypt.genSalt(10);
+			updateData.password = await bcrypt.hash(updateData.password, salt);
+		}
+
+		const admin = await Admin.findByIdAndUpdate(req.user.id, updateData, {
+			new: true,
+		});
+		if (!admin) {
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		return sendResponse(
+			res,
+			200,
+			true,
+			admin,
+			"Admin profile updated successfully"
+		);
+	} catch (err) {
+		console.error(err);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Delete the logged-in admin's account
+export const deleteAdminAccount = async (req, res) => {
+	try {
+		await Admin.findByIdAndDelete(req.user.id);
+		return sendResponse(
+			res,
+			200,
+			true,
+			null,
+			"Admin account deleted successfully"
+		);
 	} catch (err) {
 		console.error(err);
 		return sendResponse(res, 500, false, null, "Server error");
