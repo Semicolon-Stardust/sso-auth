@@ -13,11 +13,9 @@ const userRegisterSchema = z.object({
 	password: z
 		.string()
 		.min(6, { message: "Password must be at least 6 characters long" }),
-	confirmPassword: z
-		.string()
-		.min(6, {
-			message: "Confirm password must be at least 6 characters long",
-		}),
+	confirmPassword: z.string().min(6, {
+		message: "Confirm password must be at least 6 characters long",
+	}),
 	dateOfBirth: z.string().optional(),
 	emergencyRecoveryContact: z.string().optional(),
 });
@@ -205,6 +203,70 @@ export const logoutUser = async (req, res) => {
 	try {
 		res.clearCookie("token");
 		return sendResponse(res, 200, true, null, "Logged out successfully");
+	} catch (err) {
+		console.error(err);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Retrieve the profile of the logged-in user
+export const getUserProfile = async (req, res) => {
+	try {
+	  const user = await User.findById(req.user.id).select('-password');
+	  if (!user) {
+		return sendResponse(res, 404, false, null, "User not found");
+	  }
+	  return sendResponse(res, 200, true, user, "User profile retrieved");
+	} catch (err) {
+	  console.error(err);
+	  return sendResponse(res, 500, false, null, "Server error");
+	}
+  };
+
+// Update the profile of the logged-in user
+export const updateUserProfile = async (req, res) => {
+	try {
+		// Get the update data from the request body.
+		// It can contain any field the user is allowed to update.
+		const updateData = req.body;
+
+		// If password is being updated, hash the new password
+		if (updateData.password) {
+			const salt = await bcrypt.genSalt(10);
+			updateData.password = await bcrypt.hash(updateData.password, salt);
+		}
+
+		// Update the user with the new data and return the updated user
+		const user = await User.findByIdAndUpdate(req.user.id, updateData, {
+			new: true,
+		});
+		if (!user) {
+			return sendResponse(res, 404, false, null, "User not found");
+		}
+		return sendResponse(
+			res,
+			200,
+			true,
+			user,
+			"User profile updated successfully"
+		);
+	} catch (err) {
+		console.error(err);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Delete the logged-in user's account
+export const deleteUserAccount = async (req, res) => {
+	try {
+		await User.findByIdAndDelete(req.user.id);
+		return sendResponse(
+			res,
+			200,
+			true,
+			null,
+			"User account deleted successfully"
+		);
 	} catch (err) {
 		console.error(err);
 		return sendResponse(res, 500, false, null, "Server error");

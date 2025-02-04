@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import userRoutes from "./router/userRoutes.js";
 import adminRoutes from "./router/adminRoutes.js";
+import userExtraRoutes from './router/userExtraRoutes.js';
 
 dotenv.config();
 
@@ -26,6 +27,9 @@ app.use(cookieParser());
 // Mount routes (with dynamic versioning)
 app.use(userRoutes(API_VERSION));
 app.use(adminRoutes(API_VERSION));
+
+// Mount extra user routes
+app.use(userExtraRoutes(API_VERSION));
 
 // Optional: Base route for health check
 app.get("/", (req, res) => {
