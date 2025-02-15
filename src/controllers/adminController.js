@@ -3,6 +3,7 @@
 import bcrypt from "bcryptjs";
 import _ from "lodash";
 import { z } from "zod";
+import crypto from "crypto"; // NEW: to generate verification token
 import Admin from "../models/Admin.js";
 import Session from "../models/Session.js";
 import {
@@ -10,6 +11,7 @@ import {
 	verifyAdminToken,
 } from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
+import { sendVerificationEmail } from "../services/emailService.js"; // NEW: to send email
 
 // Use only one logger (Winston)
 import logger from "../utils/logger.js";
@@ -20,15 +22,18 @@ import logger from "../utils/logger.js";
 
 const adminRegisterSchema = z.object({
 	name: z.string().min(1, { message: "Name is required" }),
-	email: z.string().email({ message: "Invalid email format" }),
+	email: z
+		.string()
+		.email({ message: "Invalid email format" })
+		.refine((val) => val.endsWith("@dayadevraha.com"), {
+			message: "Admin email must be a @dayadevraha.com email",
+		}),
 	password: z
 		.string()
 		.min(6, { message: "Password must be at least 6 characters long" }),
-	confirmPassword: z
-		.string()
-		.min(6, {
-			message: "Confirm password must be at least 6 characters long",
-		}),
+	confirmPassword: z.string().min(6, {
+		message: "Confirm password must be at least 6 characters long",
+	}),
 	adminKey: z.string().min(1, { message: "Admin key is required" }),
 	role: z.enum(["Admin", "Super Admin", "Moderator"]),
 	permissions: z.array(z.string()).optional(),
@@ -126,10 +131,18 @@ export const registerAdmin = async (req, res) => {
 		const salt = await bcrypt.genSalt(10);
 		parsedData.password = await bcrypt.hash(parsedData.password, salt);
 
-		// Create admin (note: email remains unverified by default)
+		// Create admin (email remains unverified by default)
 		admin = await Admin.create(parsedData);
 
-		// Generate token
+		// --- NEW: Generate verification token, update admin, and send verification email ---
+		const verificationToken = crypto.randomBytes(20).toString("hex");
+		admin.emailVerificationToken = verificationToken;
+		admin.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours expiry
+		await admin.save();
+		await sendVerificationEmail(admin.email, verificationToken);
+		// -----------------------------------------------------------------------------
+
+		// Generate JWT token for login
 		const token = generateAdminToken({
 			id: admin._id,
 			email: admin.email,

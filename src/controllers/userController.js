@@ -3,6 +3,7 @@
 import bcrypt from "bcryptjs";
 import _ from "lodash";
 import { z } from "zod";
+import crypto from "crypto"; // NEW: to generate a verification token
 import User from "../models/User.js";
 import Session from "../models/Session.js";
 import {
@@ -10,6 +11,8 @@ import {
 	verifyUserToken,
 } from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
+import { sendVerificationEmail } from "../services/emailService.js"; // NEW: to send email
+
 
 // Use only one logger (Winston)
 import logger from "../utils/logger.js";
@@ -24,11 +27,9 @@ const userRegisterSchema = z.object({
 	password: z
 		.string()
 		.min(6, { message: "Password must be at least 6 characters long" }),
-	confirmPassword: z
-		.string()
-		.min(6, {
-			message: "Confirm password must be at least 6 characters long",
-		}),
+	confirmPassword: z.string().min(6, {
+		message: "Confirm password must be at least 6 characters long",
+	}),
 	dateOfBirth: z.string().optional(),
 	emergencyRecoveryContact: z.string().optional(),
 });
@@ -99,7 +100,15 @@ export const registerUser = async (req, res) => {
 		// Create user
 		user = await User.create(parsedData);
 
-		// Generate JWT token
+		// --- NEW: Generate verification token, update user, and send verification email ---
+		const verificationToken = crypto.randomBytes(20).toString("hex");
+		user.emailVerificationToken = verificationToken;
+		user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours expiry
+		await user.save();
+		await sendVerificationEmail(user.email, verificationToken);
+		// -----------------------------------------------------------------------------
+
+		// Generate JWT token for login
 		const token = generateUserToken({
 			id: user._id,
 			email: user.email,
