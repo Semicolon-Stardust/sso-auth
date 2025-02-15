@@ -50,11 +50,6 @@ const adminRegisterSchema = z.object({
 	canOverrideSecuritySettings: z.boolean().optional(),
 });
 
-const adminLoginSchema = z.object({
-	email: z.string().email({ message: "Invalid email format" }),
-	password: z.string().min(1, { message: "Password is required" }),
-});
-
 // Helper to extract session data
 const getSessionData = (req, token) => ({
 	ipAddress:
@@ -131,7 +126,7 @@ export const registerAdmin = async (req, res) => {
 		const salt = await bcrypt.genSalt(10);
 		parsedData.password = await bcrypt.hash(parsedData.password, salt);
 
-		// Create admin
+		// Create admin (note: email remains unverified by default)
 		admin = await Admin.create(parsedData);
 
 		// Generate token
@@ -168,7 +163,7 @@ export const registerAdmin = async (req, res) => {
 				"accessLevel",
 				"permissions",
 			]),
-			"Admin registered successfully"
+			"Admin registered successfully. Please verify your email."
 		);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
@@ -186,7 +181,14 @@ export const registerAdmin = async (req, res) => {
 export const loginAdmin = async (req, res) => {
 	try {
 		const credentials = _.pick(req.body, ["email", "password"]);
-		const parsedCreds = adminLoginSchema.parse(credentials);
+		const parsedCreds = z
+			.object({
+				email: z.string().email({ message: "Invalid email format" }),
+				password: z
+					.string()
+					.min(1, { message: "Password is required" }),
+			})
+			.parse(credentials);
 		const admin = await Admin.findOne({ email: parsedCreds.email });
 		if (!admin) {
 			logger.warn(`Admin login failed: ${parsedCreds.email} not found.`);
@@ -294,7 +296,7 @@ export const logoutAdmin = async (req, res) => {
 	}
 };
 
-// Retrieve admin profile
+// Retrieve admin profile (requires verified email)
 export const getAdminProfile = async (req, res) => {
 	try {
 		const admin = await Admin.findById(req.admin.id).select("-password");
@@ -304,6 +306,15 @@ export const getAdminProfile = async (req, res) => {
 			);
 			return sendResponse(res, 404, false, null, "Admin not found");
 		}
+		if (!admin.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to access your profile."
+			);
+		}
 		logger.info(`Admin profile retrieved: ${req.admin.id}`);
 		return sendResponse(res, 200, true, admin, "Admin profile retrieved");
 	} catch (err) {
@@ -312,9 +323,24 @@ export const getAdminProfile = async (req, res) => {
 	}
 };
 
-// Update admin profile
+// Update admin profile (requires verified email)
 export const updateAdminProfile = async (req, res) => {
 	try {
+		const existingAdmin = await Admin.findById(req.admin.id);
+		if (!existingAdmin) {
+			logger.warn(`Admin not found for update: ${req.admin.id}`);
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		if (!existingAdmin.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to update your profile."
+			);
+		}
+
 		const allowedFields = [
 			"name",
 			"email",
@@ -358,9 +384,23 @@ export const updateAdminProfile = async (req, res) => {
 	}
 };
 
-// Delete admin account
+// Delete admin account (requires verified email)
 export const deleteAdminAccount = async (req, res) => {
 	try {
+		const existingAdmin = await Admin.findById(req.admin.id);
+		if (!existingAdmin) {
+			logger.warn(`Admin not found for deletion: ${req.admin.id}`);
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		if (!existingAdmin.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to delete your account."
+			);
+		}
 		await Admin.findByIdAndDelete(req.admin.id);
 		logger.info(`Admin account deleted: ${req.admin.id}`);
 		return sendResponse(

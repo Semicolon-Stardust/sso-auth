@@ -8,12 +8,21 @@ import dotenv from "dotenv";
 import userRoutes from "./router/userRoutes.js";
 import adminRoutes from "./router/adminRoutes.js";
 import userExtraRoutes from "./router/userExtraRoutes.js";
+import adminExtraRoutes from "./router/adminExtraRoutes.js";
 
 dotenv.config();
 
 const app = express();
 const CLIENT_PORT = process.env.CLIENT_PORT || 8000;
-const API_VERSION = process.env.VERSION || "1";
+const API_VERSION = process.env.API_VERSION || "1";
+
+// Configure CORS with the client origin
+app.use(
+	cors({
+		origin: `http://localhost:${CLIENT_PORT}`,
+		credentials: true,
+	})
+);
 
 // Secure the app with Helmet
 app.use(helmet());
@@ -30,6 +39,7 @@ app.use(cookieParser());
 app.use(userRoutes(API_VERSION));
 app.use(adminRoutes(API_VERSION));
 app.use(userExtraRoutes(API_VERSION));
+app.use(adminExtraRoutes(API_VERSION));
 
 // Health check route
 app.get("/", (req, res) => {
