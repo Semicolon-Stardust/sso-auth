@@ -11,7 +11,7 @@ import {
 	verifyAdminToken,
 } from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
-import { sendVerificationEmail } from "../services/emailService.js"; // NEW: to send email
+import { sendAdminVerificationEmail } from "../services/emailService.js"; // NEW: to send email
 
 // Use only one logger (Winston)
 import logger from "../utils/logger.js";
@@ -139,7 +139,7 @@ export const registerAdmin = async (req, res) => {
 		admin.emailVerificationToken = verificationToken;
 		admin.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours expiry
 		await admin.save();
-		await sendVerificationEmail(admin.email, verificationToken);
+		await sendAdminVerificationEmail(admin.email, verificationToken);
 		// -----------------------------------------------------------------------------
 
 		// Generate JWT token for login

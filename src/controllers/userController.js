@@ -11,7 +11,7 @@ import {
 	verifyUserToken,
 } from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
-import { sendVerificationEmail } from "../services/emailService.js"; // NEW: to send email
+import { sendUserVerificationEmail } from "../services/emailService.js"; // NEW: to send email
 
 
 // Use only one logger (Winston)
@@ -105,7 +105,7 @@ export const registerUser = async (req, res) => {
 		user.emailVerificationToken = verificationToken;
 		user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours expiry
 		await user.save();
-		await sendVerificationEmail(user.email, verificationToken);
+		await sendUserVerificationEmail(user.email, verificationToken);
 		// -----------------------------------------------------------------------------
 
 		// Generate JWT token for login

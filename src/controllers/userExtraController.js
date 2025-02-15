@@ -6,9 +6,9 @@ import _ from "lodash";
 import User from "../models/User.js";
 import { sendResponse } from "../utils/helpers.js";
 import {
-	sendVerificationEmail,
-	sendResetPasswordEmail,
-	sendTwoFactorOTPEmail,
+	sendUserVerificationEmail,
+	sendUserResetPasswordEmail,
+	sendUserTwoFactorOTPEmail,
 } from "../services/emailService.js";
 
 // Use only the Winston logger
@@ -100,7 +100,7 @@ export const resendVerificationEmail = async (req, res) => {
 		user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
 		await user.save();
 
-		await sendVerificationEmail(user.email, token);
+		await sendUserVerificationEmail(user.email, token);
 
 		logger.info(`Resent verification email to user: ${user._id}`);
 		return sendResponse(res, 200, true, null, "Verification email sent");
@@ -135,7 +135,7 @@ export const forgotPassword = async (req, res) => {
 		user.forgotPasswordExpires = Date.now() + 60 * 60 * 1000;
 		await user.save();
 
-		await sendResetPasswordEmail(user.email, token);
+		await sendUserResetPasswordEmail(user.email, token);
 
 		logger.info(`Password reset email sent for user: ${user._id}`);
 		return sendResponse(res, 200, true, null, "Password reset email sent");
@@ -229,7 +229,7 @@ export const sendTwoFactorOTP = async (req, res) => {
 		user.twoFactorOTPExpires = Date.now() + 5 * 60 * 1000;
 		await user.save();
 
-		await sendTwoFactorOTPEmail(user.email, otp);
+		await sendUserTwoFactorOTPEmail(user.email, otp);
 
 		logger.info(`OTP sent for 2FA to user: ${user._id}`);
 		return sendResponse(res, 200, true, null, "OTP sent to email");
