@@ -9,7 +9,7 @@ import {
 	deleteUserAccount,
 } from "../controllers/userController.js";
 import { loginLimiter } from "../middlewares/rateLimiter.js";
-import { protect } from "../middlewares/authMiddleware.js";
+import { userProtect } from "../middlewares/authMiddleware.js";
 
 export default function userRoutes(version) {
 	const router = Router();
@@ -21,15 +21,15 @@ export default function userRoutes(version) {
 	router.post(`/api/v${version}/auth/logout`, logoutUser);
 
 	// CRUD endpoints for user profile
-	router.get(`/api/v${version}/auth/profile`, protect, getUserProfile);
+	router.get(`/api/v${version}/auth/profile`, userProtect, getUserProfile);
 	router.put(
 		`/api/v${version}/auth/update-profile`,
-		protect,
+		userProtect,
 		updateUserProfile
 	);
 	router.delete(
 		`/api/v${version}/auth/delete-account`,
-		protect,
+		userProtect,
 		deleteUserAccount
 	);
 

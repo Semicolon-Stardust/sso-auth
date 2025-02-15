@@ -5,16 +5,14 @@ import _ from "lodash";
 import { z } from "zod";
 import Admin from "../models/Admin.js";
 import Session from "../models/Session.js";
-import { generateToken, verifyToken } from "../services/tokenServices.js";
+import {
+	generateAdminToken,
+	verifyAdminToken,
+} from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
 
-// Import loggers
-import logger from "../utils/logger.js"; // Winston logger
-import pinoLogger from "../utils/pinoLogger.js"; // Pino logger
-import bunyanLogger from "../utils/bunyanLogger.js"; // Bunyan logger
-import { authLogger } from "../utils/log4jsConfig.js"; // Log4js logger for authentication flows
-import signale from "../utils/signaleLogger.js"; // Signale for development logs
-import tracerLogger from "../utils/tracerLogger.js"; // Tracer for function call tracing
+// Use only one logger (Winston)
+import logger from "../utils/logger.js";
 
 // ------------------------------
 // Zod Schemas for Admin Actions
@@ -89,9 +87,7 @@ export const registerAdmin = async (req, res) => {
 
 		// Check if passwords match
 		if (parsedData.password !== parsedData.confirmPassword) {
-			authLogger.warn(
-				"Admin registration failed: Passwords do not match."
-			);
+			logger.warn("Admin registration failed: Passwords do not match.");
 			return sendResponse(
 				res,
 				400,
@@ -100,7 +96,6 @@ export const registerAdmin = async (req, res) => {
 				"Passwords do not match"
 			);
 		}
-		// Remove confirmPassword from parsed data
 		delete parsedData.confirmPassword;
 
 		// Validate admin key
@@ -108,14 +103,14 @@ export const registerAdmin = async (req, res) => {
 			parsedData.role !== "Super Admin" &&
 			parsedData.adminKey !== process.env.ADMIN_KEY
 		) {
-			authLogger.warn(`Invalid admin key for ${parsedData.email}`);
+			logger.warn(`Invalid admin key for ${parsedData.email}`);
 			return sendResponse(res, 401, false, null, "Invalid admin key");
 		}
 		if (
 			parsedData.role === "Super Admin" &&
 			parsedData.superAdminKey !== process.env.SUPER_ADMIN_KEY
 		) {
-			authLogger.warn(`Invalid super admin key for ${parsedData.email}`);
+			logger.warn(`Invalid super admin key for ${parsedData.email}`);
 			return sendResponse(
 				res,
 				401,
@@ -128,9 +123,7 @@ export const registerAdmin = async (req, res) => {
 		// Check if admin exists
 		let admin = await Admin.findOne({ email: parsedData.email });
 		if (admin) {
-			authLogger.warn(
-				`Admin with email ${parsedData.email} already exists.`
-			);
+			logger.warn(`Admin with email ${parsedData.email} already exists.`);
 			return sendResponse(res, 400, false, null, "Admin already exists");
 		}
 
@@ -141,11 +134,10 @@ export const registerAdmin = async (req, res) => {
 		// Create admin
 		admin = await Admin.create(parsedData);
 
-		// Generate token and set cookie
-		const token = generateToken({
+		// Generate token
+		const token = generateAdminToken({
 			id: admin._id,
 			email: admin.email,
-			isAdmin: admin.isAdmin,
 		});
 		const cookieOptions = {
 			httpOnly: true,
@@ -153,7 +145,7 @@ export const registerAdmin = async (req, res) => {
 			sameSite: "strict",
 			maxAge: 60 * 60 * 1000,
 		};
-		res.cookie("token", token, cookieOptions);
+		res.cookie("admin-token", token, cookieOptions);
 
 		// Create a session record
 		await Session.create({
@@ -162,15 +154,7 @@ export const registerAdmin = async (req, res) => {
 			...getSessionData(req, token),
 		});
 
-		// Logging messages
 		logger.info(`Admin registered: ${admin._id}`);
-		pinoLogger.info({ adminId: admin._id }, "Pino: New admin registered");
-		bunyanLogger.info(
-			{ adminId: admin._id },
-			"Admin registration successful"
-		);
-		signale.success(`Admin ${admin.email} registered successfully.`);
-		tracerLogger.trace(`registerAdmin executed for admin ${admin._id}`);
 
 		return sendResponse(
 			res,
@@ -188,7 +172,7 @@ export const registerAdmin = async (req, res) => {
 		);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
-			authLogger.error("Validation error during admin registration.");
+			logger.error("Validation error during admin registration.");
 			return res
 				.status(400)
 				.json({ success: false, errors: formatError(err.errors) });
@@ -205,9 +189,7 @@ export const loginAdmin = async (req, res) => {
 		const parsedCreds = adminLoginSchema.parse(credentials);
 		const admin = await Admin.findOne({ email: parsedCreds.email });
 		if (!admin) {
-			authLogger.warn(
-				`Admin login failed: ${parsedCreds.email} not found.`
-			);
+			logger.warn(`Admin login failed: ${parsedCreds.email} not found.`);
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 		const isMatch = await bcrypt.compare(
@@ -215,16 +197,16 @@ export const loginAdmin = async (req, res) => {
 			admin.password
 		);
 		if (!isMatch) {
-			authLogger.warn(
+			logger.warn(
 				`Admin login failed: Incorrect password for ${parsedCreds.email}`
 			);
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 
-		const token = generateToken({
+		// Generate token
+		const token = generateAdminToken({
 			id: admin._id,
 			email: admin.email,
-			isAdmin: admin.isAdmin,
 		});
 		const cookieOptions = {
 			httpOnly: true,
@@ -232,7 +214,7 @@ export const loginAdmin = async (req, res) => {
 			sameSite: "strict",
 			maxAge: 60 * 60 * 1000,
 		};
-		res.cookie("token", token, cookieOptions);
+		res.cookie("admin-token", token, cookieOptions);
 
 		await Session.create({
 			user: admin._id,
@@ -241,10 +223,6 @@ export const loginAdmin = async (req, res) => {
 		});
 
 		logger.info(`Admin logged in: ${admin._id}`);
-		pinoLogger.info({ adminId: admin._id }, "Pino: Admin logged in");
-		bunyanLogger.info({ adminId: admin._id }, "Admin login successful");
-		signale.success(`Admin ${admin.email} logged in successfully.`);
-		tracerLogger.trace(`loginAdmin executed for admin ${admin._id}`);
 
 		return sendResponse(
 			res,
@@ -262,7 +240,7 @@ export const loginAdmin = async (req, res) => {
 		);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
-			authLogger.error("Validation error during admin login.");
+			logger.error("Validation error during admin login.");
 			return res
 				.status(400)
 				.json({ success: false, errors: formatError(err.errors) });
@@ -276,8 +254,8 @@ export const loginAdmin = async (req, res) => {
 export const validateAdminToken = async (req, res) => {
 	try {
 		let token;
-		if (req.cookies && req.cookies.token) {
-			token = req.cookies.token;
+		if (req.cookies && req.cookies["admin-token"]) {
+			token = req.cookies["admin-token"];
 		} else if (
 			req.headers.authorization &&
 			req.headers.authorization.startsWith("Bearer ")
@@ -285,19 +263,15 @@ export const validateAdminToken = async (req, res) => {
 			token = req.headers.authorization.split(" ")[1];
 		}
 		if (!token) {
-			authLogger.warn("No token provided for admin validation.");
+			logger.warn("No token provided for admin validation.");
 			return sendResponse(res, 401, false, null, "No token provided");
 		}
-		const decoded = verifyToken(token);
+		const decoded = verifyAdminToken(token);
 		if (!decoded) {
-			authLogger.warn("Invalid admin token provided.");
+			logger.warn("Invalid admin token provided.");
 			return sendResponse(res, 401, false, null, "Invalid token");
 		}
 		logger.info(`Admin token validated: ${decoded.id}`);
-		pinoLogger.info({ adminId: decoded.id }, "Pino: Admin token validated");
-		bunyanLogger.info({ adminId: decoded.id }, "Admin token is valid");
-		signale.success("Admin token is valid");
-		tracerLogger.trace("validateAdminToken executed");
 
 		return sendResponse(res, 200, true, decoded, "Token is valid");
 	} catch (err) {
@@ -309,15 +283,9 @@ export const validateAdminToken = async (req, res) => {
 // Logout admin
 export const logoutAdmin = async (req, res) => {
 	try {
-		res.clearCookie("token");
+		res.clearCookie("admin-token");
 		logger.info(
-			`Admin logged out: ${req.user ? req.user.id : "unknown admin"}`
-		);
-		signale.success("Admin logged out successfully.");
-		tracerLogger.trace(
-			`logoutAdmin executed for admin ${
-				req.user ? req.user.id : "unknown"
-			}`
+			`Admin logged out: ${req.admin ? req.admin.id : "unknown admin"}`
 		);
 		return sendResponse(res, 200, true, null, "Logged out successfully");
 	} catch (err) {
@@ -329,14 +297,14 @@ export const logoutAdmin = async (req, res) => {
 // Retrieve admin profile
 export const getAdminProfile = async (req, res) => {
 	try {
-		const admin = await Admin.findById(req.user.id).select("-password");
+		const admin = await Admin.findById(req.admin.id).select("-password");
 		if (!admin) {
-			authLogger.warn(
-				`Admin not found for profile retrieval: ${req.user.id}`
+			logger.warn(
+				`Admin not found for profile retrieval: ${req.admin.id}`
 			);
 			return sendResponse(res, 404, false, null, "Admin not found");
 		}
-		logger.info(`Admin profile retrieved: ${req.user.id}`);
+		logger.info(`Admin profile retrieved: ${req.admin.id}`);
 		return sendResponse(res, 200, true, admin, "Admin profile retrieved");
 	} catch (err) {
 		logger.error(`Error in getAdminProfile: ${err.message}`);
@@ -362,14 +330,14 @@ export const updateAdminProfile = async (req, res) => {
 			const salt = await bcrypt.genSalt(10);
 			updateData.password = await bcrypt.hash(updateData.password, salt);
 		}
-		const admin = await Admin.findByIdAndUpdate(req.user.id, updateData, {
+		const admin = await Admin.findByIdAndUpdate(req.admin.id, updateData, {
 			new: true,
 		});
 		if (!admin) {
-			authLogger.warn(`Admin not found for update: ${req.user.id}`);
+			logger.warn(`Admin not found for update: ${req.admin.id}`);
 			return sendResponse(res, 404, false, null, "Admin not found");
 		}
-		logger.info(`Admin profile updated: ${req.user.id}`);
+		logger.info(`Admin profile updated: ${req.admin.id}`);
 		return sendResponse(
 			res,
 			200,
@@ -393,9 +361,8 @@ export const updateAdminProfile = async (req, res) => {
 // Delete admin account
 export const deleteAdminAccount = async (req, res) => {
 	try {
-		await Admin.findByIdAndDelete(req.user.id);
-		logger.info(`Admin account deleted: ${req.user.id}`);
-		signale.success(`Admin account ${req.user.id} deleted successfully.`);
+		await Admin.findByIdAndDelete(req.admin.id);
+		logger.info(`Admin account deleted: ${req.admin.id}`);
 		return sendResponse(
 			res,
 			200,

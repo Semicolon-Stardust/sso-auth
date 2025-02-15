@@ -9,7 +9,7 @@ import {
 	deleteAdminAccount,
 } from "../controllers/adminController.js";
 import { loginLimiter } from "../middlewares/rateLimiter.js";
-import { protect } from "../middlewares/authMiddleware.js";
+import { adminProtect } from "../middlewares/authMiddleware.js";
 
 export default function adminRoutes(version) {
 	const router = Router();
@@ -21,15 +21,15 @@ export default function adminRoutes(version) {
 	router.post(`/api/v${version}/admin/logout`, logoutAdmin);
 
 	// CRUD endpoints for admin profile
-	router.get(`/api/v${version}/admin/profile`, protect, getAdminProfile);
+	router.get(`/api/v${version}/admin/profile`, adminProtect, getAdminProfile);
 	router.put(
 		`/api/v${version}/admin/update-profile`,
-		protect,
+		adminProtect,
 		updateAdminProfile
 	);
 	router.delete(
 		`/api/v${version}/admin/delete-account`,
-		protect,
+		adminProtect,
 		deleteAdminAccount
 	);
 

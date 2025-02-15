@@ -19,10 +19,6 @@ const adminSchema = new mongoose.Schema(
 			required: [true, "Password is required"],
 		},
 		// "confirmPassword" is not stored; it’s only for validation on registration.
-		isAdmin: {
-			type: Boolean,
-			default: true,
-		},
 		adminKey: {
 			type: String,
 			// Compare with process.env.ADMIN_KEY in the controller.

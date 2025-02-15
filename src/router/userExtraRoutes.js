@@ -1,3 +1,5 @@
+// src/routes/userExtraRoutes.js
+
 import { Router } from "express";
 import {
 	verifyEmail,
@@ -6,6 +8,7 @@ import {
 	resetPassword,
 	sendTwoFactorOTP,
 	verifyTwoFactorOTP,
+	getVerificationStatus,
 } from "../controllers/userExtraController.js";
 
 export default function userExtraRoutes(version) {
@@ -16,6 +19,12 @@ export default function userExtraRoutes(version) {
 	router.post(
 		`/api/v${version}/auth/resend-verification`,
 		resendVerificationEmail
+	);
+
+	// Verification status endpoint
+	router.get(
+		`/api/v${version}/auth/verification-status`,
+		getVerificationStatus
 	);
 
 	// Password reset endpoints

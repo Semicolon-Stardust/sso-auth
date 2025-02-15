@@ -26,10 +26,7 @@ const userSchema = new mongoose.Schema(
 		emergencyRecoveryContact: {
 			type: String,
 		},
-		isAdmin: {
-			type: Boolean,
-			default: false,
-		},
+		// Removed isAdmin since admin and user are already separate schemas
 		// New fields for email verification
 		isVerified: {
 			type: Boolean,

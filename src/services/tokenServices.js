@@ -1,13 +1,27 @@
 // src/services/tokenServices.js
 import jwt from "jsonwebtoken";
 
-export const generateToken = (payload) => {
-	return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "1h" });
+// Admin token functions
+export const generateAdminToken = (payload) => {
+	return jwt.sign(payload, process.env.ADMIN_JWT_SECRET, { expiresIn: "1h" });
 };
 
-export const verifyToken = (token) => {
+export const verifyAdminToken = (token) => {
 	try {
-		return jwt.verify(token, process.env.JWT_SECRET);
+		return jwt.verify(token, process.env.ADMIN_JWT_SECRET);
+	} catch (error) {
+		return null;
+	}
+};
+
+// User token functions
+export const generateUserToken = (payload) => {
+	return jwt.sign(payload, process.env.USER_JWT_SECRET, { expiresIn: "1h" });
+};
+
+export const verifyUserToken = (token) => {
+	try {
+		return jwt.verify(token, process.env.USER_JWT_SECRET);
 	} catch (error) {
 		return null;
 	}

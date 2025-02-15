@@ -11,13 +11,8 @@ import {
 	sendTwoFactorOTPEmail,
 } from "../services/emailService.js";
 
-// Import loggers
-import logger from "../utils/logger.js"; // Winston logger
-import pinoLogger from "../utils/pinoLogger.js"; // Pino logger
-import bunyanLogger from "../utils/bunyanLogger.js"; // Bunyan logger
-import { authLogger } from "../utils/log4jsConfig.js"; // Log4js logger for authentication flows
-import signale from "../utils/signaleLogger.js"; // Signale for development logs
-import tracerLogger from "../utils/tracerLogger.js"; // Tracer for function call tracing
+// Use only the Winston logger
+import logger from "../utils/logger.js";
 
 // Helper to generate a random token
 const generateToken = () => crypto.randomBytes(20).toString("hex");
@@ -30,7 +25,7 @@ export const verifyEmail = async (req, res) => {
 	try {
 		const { token } = req.query;
 		if (!token) {
-			authLogger.warn("Verification token missing in request.");
+			logger.warn("Verification token missing in request.");
 			return sendResponse(res, 400, false, null, "Token is required");
 		}
 
@@ -41,7 +36,7 @@ export const verifyEmail = async (req, res) => {
 		});
 
 		if (!user) {
-			authLogger.warn(`Invalid or expired token: ${token}`);
+			logger.warn(`Invalid or expired token: ${token}`);
 			return sendResponse(
 				res,
 				400,
@@ -57,11 +52,6 @@ export const verifyEmail = async (req, res) => {
 		await user.save();
 
 		logger.info(`Email verified for user: ${user._id}`);
-		pinoLogger.info({ userId: user._id }, "Pino: Email verified");
-		bunyanLogger.info({ userId: user._id }, "Email verified successfully");
-		signale.success(`Email verified successfully for ${user.email}`);
-		tracerLogger.trace(`verifyEmail executed for user ${user._id}`);
-
 		return sendResponse(
 			res,
 			200,
@@ -80,19 +70,19 @@ export const resendVerificationEmail = async (req, res) => {
 	try {
 		const { email } = req.body;
 		if (!email) {
-			authLogger.warn("Resend verification: Email missing in request.");
+			logger.warn("Resend verification: Email missing in request.");
 			return sendResponse(res, 400, false, null, "Email is required");
 		}
 
 		const user = await User.findOne({ email });
 		if (!user) {
-			authLogger.warn(
+			logger.warn(
 				`Resend verification failed: User not found (${email})`
 			);
 			return sendResponse(res, 400, false, null, "User not found");
 		}
 		if (user.isVerified) {
-			authLogger.info(
+			logger.info(
 				`User ${email} already verified; no need to resend email.`
 			);
 			return sendResponse(
@@ -113,11 +103,6 @@ export const resendVerificationEmail = async (req, res) => {
 		await sendVerificationEmail(user.email, token);
 
 		logger.info(`Resent verification email to user: ${user._id}`);
-		signale.success(`Verification email resent to ${user.email}`);
-		tracerLogger.trace(
-			`resendVerificationEmail executed for user ${user._id}`
-		);
-
 		return sendResponse(res, 200, true, null, "Verification email sent");
 	} catch (err) {
 		logger.error(`Error in resendVerificationEmail: ${err.message}`);
@@ -134,15 +119,13 @@ export const forgotPassword = async (req, res) => {
 	try {
 		const { email } = req.body;
 		if (!email) {
-			authLogger.warn("Forgot password: Email missing.");
+			logger.warn("Forgot password: Email missing.");
 			return sendResponse(res, 400, false, null, "Email is required");
 		}
 
 		const user = await User.findOne({ email });
 		if (!user) {
-			authLogger.warn(
-				`Forgot password: User not found for email ${email}`
-			);
+			logger.warn(`Forgot password: User not found for email ${email}`);
 			return sendResponse(res, 400, false, null, "User not found");
 		}
 
@@ -155,9 +138,6 @@ export const forgotPassword = async (req, res) => {
 		await sendResetPasswordEmail(user.email, token);
 
 		logger.info(`Password reset email sent for user: ${user._id}`);
-		signale.success(`Password reset email sent to ${user.email}`);
-		tracerLogger.trace(`forgotPassword executed for user ${user._id}`);
-
 		return sendResponse(res, 200, true, null, "Password reset email sent");
 	} catch (err) {
 		logger.error(`Error in forgotPassword: ${err.message}`);
@@ -172,7 +152,7 @@ export const resetPassword = async (req, res) => {
 		const data = _.pick(req.body, allowedFields);
 
 		if (!data.token || !data.newPassword || !data.confirmPassword) {
-			authLogger.warn("Reset password: Missing required fields.");
+			logger.warn("Reset password: Missing required fields.");
 			return sendResponse(
 				res,
 				400,
@@ -183,7 +163,7 @@ export const resetPassword = async (req, res) => {
 		}
 
 		if (data.newPassword !== data.confirmPassword) {
-			authLogger.warn("Reset password: Passwords do not match.");
+			logger.warn("Reset password: Passwords do not match.");
 			return sendResponse(
 				res,
 				400,
@@ -198,7 +178,7 @@ export const resetPassword = async (req, res) => {
 			forgotPasswordExpires: { $gt: Date.now() },
 		});
 		if (!user) {
-			authLogger.warn(
+			logger.warn(
 				`Reset password failed: Invalid or expired token (${data.token})`
 			);
 			return sendResponse(
@@ -217,10 +197,6 @@ export const resetPassword = async (req, res) => {
 		await user.save();
 
 		logger.info(`Password reset successful for user: ${user._id}`);
-		pinoLogger.info({ userId: user._id }, "Pino: Password reset");
-		signale.success(`Password reset successful for ${user.email}`);
-		tracerLogger.trace(`resetPassword executed for user ${user._id}`);
-
 		return sendResponse(res, 200, true, null, "Password reset successful");
 	} catch (err) {
 		logger.error(`Error in resetPassword: ${err.message}`);
@@ -237,13 +213,13 @@ export const sendTwoFactorOTP = async (req, res) => {
 	try {
 		const { email } = req.body;
 		if (!email) {
-			authLogger.warn("Send OTP: Email missing.");
+			logger.warn("Send OTP: Email missing.");
 			return sendResponse(res, 400, false, null, "Email is required");
 		}
 
 		const user = await User.findOne({ email });
 		if (!user) {
-			authLogger.warn(`Send OTP: User not found for email ${email}`);
+			logger.warn(`Send OTP: User not found for email ${email}`);
 			return sendResponse(res, 400, false, null, "User not found");
 		}
 
@@ -256,10 +232,6 @@ export const sendTwoFactorOTP = async (req, res) => {
 		await sendTwoFactorOTPEmail(user.email, otp);
 
 		logger.info(`OTP sent for 2FA to user: ${user._id}`);
-		pinoLogger.info({ userId: user._id }, "Pino: OTP sent for 2FA");
-		signale.success(`OTP sent to ${user.email}`);
-		tracerLogger.trace(`sendTwoFactorOTP executed for user ${user._id}`);
-
 		return sendResponse(res, 200, true, null, "OTP sent to email");
 	} catch (err) {
 		logger.error(`Error in sendTwoFactorOTP: ${err.message}`);
@@ -272,7 +244,7 @@ export const verifyTwoFactorOTP = async (req, res) => {
 	try {
 		const { email, otp } = req.body;
 		if (!email || !otp) {
-			authLogger.warn("Verify OTP: Email or OTP missing.");
+			logger.warn("Verify OTP: Email or OTP missing.");
 			return sendResponse(
 				res,
 				400,
@@ -288,7 +260,7 @@ export const verifyTwoFactorOTP = async (req, res) => {
 			!user.twoFactorOTP ||
 			user.twoFactorOTPExpires < Date.now()
 		) {
-			authLogger.warn(
+			logger.warn(
 				`Verify OTP failed: OTP invalid or expired for ${email}`
 			);
 			return sendResponse(
@@ -301,7 +273,7 @@ export const verifyTwoFactorOTP = async (req, res) => {
 		}
 
 		if (user.twoFactorOTP !== otp) {
-			authLogger.warn(
+			logger.warn(
 				`Verify OTP failed: Provided OTP does not match for ${email}`
 			);
 			return sendResponse(res, 400, false, null, "OTP does not match");
@@ -313,13 +285,43 @@ export const verifyTwoFactorOTP = async (req, res) => {
 		await user.save();
 
 		logger.info(`OTP verified for user: ${user._id}`);
-		pinoLogger.info({ userId: user._id }, "Pino: OTP verified for 2FA");
-		signale.success(`OTP verified successfully for ${user.email}`);
-		tracerLogger.trace(`verifyTwoFactorOTP executed for user ${user._id}`);
-
 		return sendResponse(res, 200, true, null, "OTP verified successfully");
 	} catch (err) {
 		logger.error(`Error in verifyTwoFactorOTP: ${err.message}`);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// ------------------------------
+// Get Verification Status
+// ------------------------------
+// GET /api/v1/auth/verification-status
+export const getVerificationStatus = async (req, res) => {
+	try {
+		// Assumes req.user is set by an authentication middleware
+		const user = await User.findById(req.user.id);
+		if (!user) {
+			logger.warn(
+				`User not found for verification status: ${req.user.id}`
+			);
+			return sendResponse(res, 404, false, null, "User not found");
+		}
+		const status = {
+			verified: user.isVerified,
+			message: user.isVerified
+				? "Email is verified"
+				: "Email is not verified. Please verify your email.",
+		};
+		logger.info(`Verification status retrieved for user: ${user._id}`);
+		return sendResponse(
+			res,
+			200,
+			true,
+			status,
+			"Verification status retrieved"
+		);
+	} catch (err) {
+		logger.error(`Error in getVerificationStatus: ${err.message}`);
 		return sendResponse(res, 500, false, null, "Server error");
 	}
 };
