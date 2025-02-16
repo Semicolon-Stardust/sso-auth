@@ -253,7 +253,6 @@ export const verifyTwoFactorOTP = async (req, res) => {
 				"Email and OTP are required"
 			);
 		}
-
 		const user = await User.findOne({ email });
 		if (
 			!user ||
@@ -271,21 +270,35 @@ export const verifyTwoFactorOTP = async (req, res) => {
 				"OTP is invalid or expired"
 			);
 		}
-
 		if (user.twoFactorOTP !== otp) {
 			logger.warn(
 				`Verify OTP failed: Provided OTP does not match for ${email}`
 			);
 			return sendResponse(res, 400, false, null, "OTP does not match");
 		}
-
 		// Clear OTP after successful verification
 		user.twoFactorOTP = undefined;
 		user.twoFactorOTPExpires = undefined;
 		await user.save();
 
-		logger.info(`OTP verified for user: ${user._id}`);
-		return sendResponse(res, 200, true, null, "OTP verified successfully");
+		// NEW: Generate JWT token and set it in cookies
+		const token = generateUserToken({ id: user._id, email: user.email });
+		const cookieOptions = {
+			httpOnly: true,
+			secure: process.env.NODE_ENV === "production",
+			sameSite: "strict",
+			maxAge: 60 * 60 * 1000, // 1 hour
+		};
+		res.cookie("user-token", token, cookieOptions);
+
+		logger.info(`OTP verified for user: ${user._id} and token issued`);
+		return sendResponse(
+			res,
+			200,
+			true,
+			{ token },
+			"OTP verified successfully; token issued"
+		);
 	} catch (err) {
 		logger.error(`Error in verifyTwoFactorOTP: ${err.message}`);
 		return sendResponse(res, 500, false, null, "Server error");
@@ -322,6 +335,59 @@ export const getVerificationStatus = async (req, res) => {
 		);
 	} catch (err) {
 		logger.error(`Error in getVerificationStatus: ${err.message}`);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Enable two-factor authentication for user
+export const enableTwoFactorAuth = async (req, res) => {
+	try {
+		// Assume req.user is set by your user authentication middleware
+		const user = await User.findById(req.user.id);
+		if (!user) {
+			logger.warn(
+				`User not found for enabling two-factor: ${req.user.id}`
+			);
+			return sendResponse(res, 404, false, null, "User not found");
+		}
+		user.twoFactorEnabled = true;
+		await user.save();
+		logger.info(`Two-factor authentication enabled for user: ${user._id}`);
+		return sendResponse(
+			res,
+			200,
+			true,
+			null,
+			"Two-factor authentication enabled"
+		);
+	} catch (err) {
+		logger.error(`Error in enableTwoFactorAuth: ${err.message}`);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Disable two-factor authentication for user
+export const disableTwoFactorAuth = async (req, res) => {
+	try {
+		const user = await User.findById(req.user.id);
+		if (!user) {
+			logger.warn(
+				`User not found for disabling two-factor: ${req.user.id}`
+			);
+			return sendResponse(res, 404, false, null, "User not found");
+		}
+		user.twoFactorEnabled = false;
+		await user.save();
+		logger.info(`Two-factor authentication disabled for user: ${user._id}`);
+		return sendResponse(
+			res,
+			200,
+			true,
+			null,
+			"Two-factor authentication disabled"
+		);
+	} catch (err) {
+		logger.error(`Error in disableTwoFactorAuth: ${err.message}`);
 		return sendResponse(res, 500, false, null, "Server error");
 	}
 };

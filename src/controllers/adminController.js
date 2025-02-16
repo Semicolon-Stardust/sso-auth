@@ -11,7 +11,10 @@ import {
 	verifyAdminToken,
 } from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
-import { sendAdminVerificationEmail } from "../services/emailService.js"; // NEW: to send email
+import {
+	sendAdminVerificationEmail,
+	sendAdminTwoFactorOTPEmail,
+} from "../services/emailService.js"; // NEW: to send email
 
 // Use only one logger (Winston)
 import logger from "../utils/logger.js";
@@ -218,11 +221,25 @@ export const loginAdmin = async (req, res) => {
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 
-		// Generate token
-		const token = generateAdminToken({
-			id: admin._id,
-			email: admin.email,
-		});
+		// If admin has enabled two-factor auth, send OTP and do not complete login.
+		if (admin.twoFactorEnabled) {
+			const otp = Math.floor(100000 + Math.random() * 900000).toString();
+			admin.twoFactorOTP = otp;
+			admin.twoFactorOTPExpires = Date.now() + 5 * 60 * 1000;
+			await admin.save();
+			await sendAdminTwoFactorOTPEmail(admin.email, otp);
+			logger.info(`2FA OTP sent for admin: ${admin._id}`);
+			return sendResponse(
+				res,
+				200,
+				true,
+				{ twoFactorRequired: true },
+				"OTP sent, please verify your login via the two-factor endpoint."
+			);
+		}
+
+		// If 2FA is not enabled, complete login.
+		const token = generateAdminToken({ id: admin._id, email: admin.email });
 		const cookieOptions = {
 			httpOnly: true,
 			secure: process.env.NODE_ENV === "production",
@@ -238,7 +255,6 @@ export const loginAdmin = async (req, res) => {
 		});
 
 		logger.info(`Admin logged in: ${admin._id}`);
-
 		return sendResponse(
 			res,
 			200,

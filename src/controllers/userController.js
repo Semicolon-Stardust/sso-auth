@@ -11,8 +11,10 @@ import {
 	verifyUserToken,
 } from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
-import { sendUserVerificationEmail } from "../services/emailService.js"; // NEW: to send email
-
+import {
+	sendUserVerificationEmail,
+	sendUserTwoFactorOTPEmail,
+} from "../services/emailService.js"; // NEW: to send email
 
 // Use only one logger (Winston)
 import logger from "../utils/logger.js";
@@ -176,11 +178,25 @@ export const loginUser = async (req, res) => {
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 
-		// Generate JWT token
-		const token = generateUserToken({
-			id: user._id,
-			email: user.email,
-		});
+		// If user has enabled two-factor auth, send an OTP and stop login here.
+		if (user.twoFactorEnabled) {
+			const otp = Math.floor(100000 + Math.random() * 900000).toString();
+			user.twoFactorOTP = otp;
+			user.twoFactorOTPExpires = Date.now() + 5 * 60 * 1000; // 5 minutes expiry
+			await user.save();
+			await sendUserTwoFactorOTPEmail(user.email, otp);
+			logger.info(`2FA OTP sent for user: ${user._id}`);
+			return sendResponse(
+				res,
+				200,
+				true,
+				{ twoFactorRequired: true },
+				"OTP sent, please verify your login via the two-factor endpoint."
+			);
+		}
+
+		// If 2FA is not enabled, proceed as usual
+		const token = generateUserToken({ id: user._id, email: user.email });
 		const cookieOptions = {
 			httpOnly: true,
 			secure: process.env.NODE_ENV === "production",
@@ -196,7 +212,6 @@ export const loginUser = async (req, res) => {
 		});
 
 		logger.info(`User logged in: ${user._id}`);
-
 		return sendResponse(
 			res,
 			200,

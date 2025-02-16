@@ -1,4 +1,3 @@
-// src/routes/userExtraRoutes.js
 import { Router } from "express";
 import {
 	verifyEmail,
@@ -8,7 +7,10 @@ import {
 	sendTwoFactorOTP,
 	verifyTwoFactorOTP,
 	getVerificationStatus,
+	enableTwoFactorAuth,
+	disableTwoFactorAuth,
 } from "../controllers/userExtraController.js";
+import { userProtect } from "../middlewares/authMiddleware.js"; // Ensure you import userProtect
 
 export default function userExtraRoutes(version) {
 	const router = Router();
@@ -23,6 +25,7 @@ export default function userExtraRoutes(version) {
 	// Verification status endpoint
 	router.get(
 		`/api/v${version}/user/verification-status`,
+		userProtect,
 		getVerificationStatus
 	);
 
@@ -33,6 +36,18 @@ export default function userExtraRoutes(version) {
 	// Two-factor authentication endpoints
 	router.post(`/api/v${version}/user/send-otp`, sendTwoFactorOTP);
 	router.post(`/api/v${version}/user/verify-otp`, verifyTwoFactorOTP);
+
+	// New endpoints for enabling/disabling two-factor auth
+	router.post(
+		`/api/v${version}/user/enable-two-factor`,
+		userProtect,
+		enableTwoFactorAuth
+	);
+	router.post(
+		`/api/v${version}/user/disable-two-factor`,
+		userProtect,
+		disableTwoFactorAuth
+	);
 
 	return router;
 }

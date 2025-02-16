@@ -10,6 +10,7 @@ import {
 	sendAdminResetPasswordEmail,
 	sendAdminTwoFactorOTPEmail,
 } from "../services/emailService.js";
+import { generateAdminToken } from "../services/tokenServices.js";
 
 // Use only the Winston logger
 import logger from "../utils/logger.js";
@@ -253,7 +254,6 @@ export const verifyTwoFactorOTP = async (req, res) => {
 				"Email and OTP are required"
 			);
 		}
-
 		const admin = await Admin.findOne({ email });
 		if (
 			!admin ||
@@ -271,21 +271,35 @@ export const verifyTwoFactorOTP = async (req, res) => {
 				"OTP is invalid or expired"
 			);
 		}
-
 		if (admin.twoFactorOTP !== otp) {
 			logger.warn(
 				`Verify OTP failed: Provided OTP does not match for ${email}`
 			);
 			return sendResponse(res, 400, false, null, "OTP does not match");
 		}
-
 		// Clear OTP after successful verification
 		admin.twoFactorOTP = undefined;
 		admin.twoFactorOTPExpires = undefined;
 		await admin.save();
 
-		logger.info(`OTP verified for admin: ${admin._id}`);
-		return sendResponse(res, 200, true, null, "OTP verified successfully");
+		// NEW: Generate JWT token and set it in cookies
+		const token = generateAdminToken({ id: admin._id, email: admin.email });
+		const cookieOptions = {
+			httpOnly: true,
+			secure: process.env.NODE_ENV === "production",
+			sameSite: "strict",
+			maxAge: 60 * 60 * 1000, // 1 hour
+		};
+		res.cookie("admin-token", token, cookieOptions);
+
+		logger.info(`OTP verified for admin: ${admin._id} and token issued`);
+		return sendResponse(
+			res,
+			200,
+			true,
+			{ token },
+			"OTP verified successfully; token issued"
+		);
 	} catch (err) {
 		logger.error(`Error in verifyTwoFactorOTP: ${err.message}`);
 		return sendResponse(res, 500, false, null, "Server error");
@@ -322,6 +336,63 @@ export const getVerificationStatus = async (req, res) => {
 		);
 	} catch (err) {
 		logger.error(`Error in getVerificationStatus: ${err.message}`);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Enable two-factor authentication for admin
+export const enableTwoFactorAuth = async (req, res) => {
+	try {
+		// Assume req.admin is set by your admin authentication middleware
+		const admin = await Admin.findById(req.admin.id);
+		if (!admin) {
+			logger.warn(
+				`Admin not found for enabling two-factor: ${req.admin.id}`
+			);
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		admin.twoFactorEnabled = true;
+		await admin.save();
+		logger.info(
+			`Two-factor authentication enabled for admin: ${admin._id}`
+		);
+		return sendResponse(
+			res,
+			200,
+			true,
+			null,
+			"Two-factor authentication enabled"
+		);
+	} catch (err) {
+		logger.error(`Error in enableTwoFactorAuth: ${err.message}`);
+		return sendResponse(res, 500, false, null, "Server error");
+	}
+};
+
+// Disable two-factor authentication for admin
+export const disableTwoFactorAuth = async (req, res) => {
+	try {
+		const admin = await Admin.findById(req.admin.id);
+		if (!admin) {
+			logger.warn(
+				`Admin not found for disabling two-factor: ${req.admin.id}`
+			);
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		admin.twoFactorEnabled = false;
+		await admin.save();
+		logger.info(
+			`Two-factor authentication disabled for admin: ${admin._id}`
+		);
+		return sendResponse(
+			res,
+			200,
+			true,
+			null,
+			"Two-factor authentication disabled"
+		);
+	} catch (err) {
+		logger.error(`Error in disableTwoFactorAuth: ${err.message}`);
 		return sendResponse(res, 500, false, null, "Server error");
 	}
 };
