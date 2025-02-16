@@ -3,18 +3,21 @@
 import bcrypt from "bcryptjs";
 import _ from "lodash";
 import { z } from "zod";
+import crypto from "crypto"; // NEW: to generate a verification token
 import User from "../models/User.js";
 import Session from "../models/Session.js";
-import { generateToken, verifyToken } from "../services/tokenServices.js";
+import {
+	generateUserToken,
+	verifyUserToken,
+} from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
+import {
+	sendUserVerificationEmail,
+	sendUserTwoFactorOTPEmail,
+} from "../services/emailService.js"; // NEW: to send email
 
-// Import loggers
-import logger from "../utils/logger.js"; // Winston logger
-import pinoLogger from "../utils/pinoLogger.js"; // Pino logger
-import bunyanLogger from "../utils/bunyanLogger.js"; // Bunyan logger
-import { authLogger } from "../utils/log4jsConfig.js"; // Log4js logger for auth flows
-import signale from "../utils/signaleLogger.js"; // Signale for development logs
-import tracerLogger from "../utils/tracerLogger.js"; // Tracer logger
+// Use only one logger (Winston)
+import logger from "../utils/logger.js";
 
 // -----------------------------------------------------
 // Zod Schemas for User Registration and Login
@@ -26,11 +29,9 @@ const userRegisterSchema = z.object({
 	password: z
 		.string()
 		.min(6, { message: "Password must be at least 6 characters long" }),
-	confirmPassword: z
-		.string()
-		.min(6, {
-			message: "Confirm password must be at least 6 characters long",
-		}),
+	confirmPassword: z.string().min(6, {
+		message: "Confirm password must be at least 6 characters long",
+	}),
 	dateOfBirth: z.string().optional(),
 	emergencyRecoveryContact: z.string().optional(),
 });
@@ -74,7 +75,7 @@ export const registerUser = async (req, res) => {
 
 		// Check if passwords match
 		if (parsedData.password !== parsedData.confirmPassword) {
-			authLogger.warn("Registration failed: Passwords do not match.");
+			logger.warn("Registration failed: Passwords do not match.");
 			return sendResponse(
 				res,
 				400,
@@ -88,7 +89,7 @@ export const registerUser = async (req, res) => {
 		// Check if user already exists
 		let user = await User.findOne({ email: parsedData.email });
 		if (user) {
-			authLogger.warn(
+			logger.warn(
 				`User registration failed: ${parsedData.email} already exists.`
 			);
 			return sendResponse(res, 400, false, null, "User already exists");
@@ -101,11 +102,18 @@ export const registerUser = async (req, res) => {
 		// Create user
 		user = await User.create(parsedData);
 
-		// Generate JWT token and set it in a cookie
-		const token = generateToken({
+		// --- NEW: Generate verification token, update user, and send verification email ---
+		const verificationToken = crypto.randomBytes(20).toString("hex");
+		user.emailVerificationToken = verificationToken;
+		user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours expiry
+		await user.save();
+		await sendUserVerificationEmail(user.email, verificationToken);
+		// -----------------------------------------------------------------------------
+
+		// Generate JWT token for login
+		const token = generateUserToken({
 			id: user._id,
 			email: user.email,
-			isAdmin: user.isAdmin,
 		});
 		const cookieOptions = {
 			httpOnly: true,
@@ -113,7 +121,7 @@ export const registerUser = async (req, res) => {
 			sameSite: "strict",
 			maxAge: 60 * 60 * 1000, // 1 hour
 		};
-		res.cookie("token", token, cookieOptions);
+		res.cookie("user-token", token, cookieOptions);
 
 		// Create session record
 		await Session.create({
@@ -122,12 +130,7 @@ export const registerUser = async (req, res) => {
 			...getSessionData(req, token),
 		});
 
-		// Logging
 		logger.info(`User registered: ${user._id}`);
-		pinoLogger.info({ userId: user._id }, "Pino: New user registered");
-		bunyanLogger.info({ userId: user._id }, "User registration successful");
-		signale.success(`User ${user.email} registered successfully.`);
-		tracerLogger.trace(`registerUser executed for user ${user._id}`);
 
 		return sendResponse(
 			res,
@@ -140,11 +143,11 @@ export const registerUser = async (req, res) => {
 				"dateOfBirth",
 				"emergencyRecoveryContact",
 			]),
-			"User registered successfully"
+			"User registered successfully. Please verify your email."
 		);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
-			authLogger.error("Validation error during user registration.");
+			logger.error("Validation error during user registration.");
 			return res
 				.status(400)
 				.json({ success: false, errors: formatError(err.errors) });
@@ -161,9 +164,7 @@ export const loginUser = async (req, res) => {
 		const parsedCreds = userLoginSchema.parse(credentials);
 		const user = await User.findOne({ email: parsedCreds.email });
 		if (!user) {
-			authLogger.warn(
-				`Login failed: User ${parsedCreds.email} not found.`
-			);
+			logger.warn(`Login failed: User ${parsedCreds.email} not found.`);
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 		const isMatch = await bcrypt.compare(
@@ -171,24 +172,38 @@ export const loginUser = async (req, res) => {
 			user.password
 		);
 		if (!isMatch) {
-			authLogger.warn(
+			logger.warn(
 				`Login failed: Incorrect password for ${parsedCreds.email}.`
 			);
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 
-		const token = generateToken({
-			id: user._id,
-			email: user.email,
-			isAdmin: user.isAdmin,
-		});
+		// If user has enabled two-factor auth, send an OTP and stop login here.
+		if (user.twoFactorEnabled) {
+			const otp = Math.floor(100000 + Math.random() * 900000).toString();
+			user.twoFactorOTP = otp;
+			user.twoFactorOTPExpires = Date.now() + 5 * 60 * 1000; // 5 minutes expiry
+			await user.save();
+			await sendUserTwoFactorOTPEmail(user.email, otp);
+			logger.info(`2FA OTP sent for user: ${user._id}`);
+			return sendResponse(
+				res,
+				200,
+				true,
+				{ twoFactorRequired: true },
+				"OTP sent, please verify your login via the two-factor endpoint."
+			);
+		}
+
+		// If 2FA is not enabled, proceed as usual
+		const token = generateUserToken({ id: user._id, email: user.email });
 		const cookieOptions = {
 			httpOnly: true,
 			secure: process.env.NODE_ENV === "production",
 			sameSite: "strict",
 			maxAge: 60 * 60 * 1000,
 		};
-		res.cookie("token", token, cookieOptions);
+		res.cookie("user-token", token, cookieOptions);
 
 		await Session.create({
 			user: user._id,
@@ -197,11 +212,6 @@ export const loginUser = async (req, res) => {
 		});
 
 		logger.info(`User logged in: ${user._id}`);
-		pinoLogger.info({ userId: user._id }, "Pino: User logged in");
-		bunyanLogger.info({ userId: user._id }, "User login successful");
-		signale.success(`User ${user.email} logged in.`);
-		tracerLogger.trace(`loginUser executed for user ${user._id}`);
-
 		return sendResponse(
 			res,
 			200,
@@ -217,7 +227,7 @@ export const loginUser = async (req, res) => {
 		);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
-			authLogger.error("Validation error during user login.");
+			logger.error("Validation error during user login.");
 			return res
 				.status(400)
 				.json({ success: false, errors: formatError(err.errors) });
@@ -231,8 +241,8 @@ export const loginUser = async (req, res) => {
 export const validateUserToken = async (req, res) => {
 	try {
 		let token;
-		if (req.cookies && req.cookies.token) {
-			token = req.cookies.token;
+		if (req.cookies && req.cookies["user-token"]) {
+			token = req.cookies["user-token"];
 		} else if (
 			req.headers.authorization &&
 			req.headers.authorization.startsWith("Bearer ")
@@ -240,18 +250,15 @@ export const validateUserToken = async (req, res) => {
 			token = req.headers.authorization.split(" ")[1];
 		}
 		if (!token) {
-			authLogger.warn("No token provided for user validation.");
+			logger.warn("No token provided for user validation.");
 			return sendResponse(res, 401, false, null, "No token provided");
 		}
-		const decoded = verifyToken(token);
+		const decoded = verifyUserToken(token);
 		if (!decoded) {
-			authLogger.warn("Invalid token provided for user.");
+			logger.warn("Invalid token provided for user.");
 			return sendResponse(res, 401, false, null, "Invalid token");
 		}
 		logger.info("User token validated successfully");
-		pinoLogger.info("Pino: User token validated");
-		signale.success("User token is valid");
-		tracerLogger.trace("validateUserToken executed");
 
 		return sendResponse(res, 200, true, { token }, "Token is valid");
 	} catch (err) {
@@ -263,13 +270,9 @@ export const validateUserToken = async (req, res) => {
 // Logout user
 export const logoutUser = async (req, res) => {
 	try {
-		res.clearCookie("token");
+		res.clearCookie("user-token");
 		logger.info(
 			`User logged out: ${req.user ? req.user.id : "unknown user"}`
-		);
-		signale.success("User logged out successfully.");
-		tracerLogger.trace(
-			`logoutUser executed for user ${req.user ? req.user.id : "unknown"}`
 		);
 		return sendResponse(res, 200, true, null, "Logged out successfully");
 	} catch (err) {
@@ -278,15 +281,22 @@ export const logoutUser = async (req, res) => {
 	}
 };
 
-// Retrieve user profile
+// Retrieve user profile (requires verified email)
 export const getUserProfile = async (req, res) => {
 	try {
 		const user = await User.findById(req.user.id).select("-password");
 		if (!user) {
-			authLogger.warn(
-				`User not found for profile retrieval: ${req.user.id}`
-			);
+			logger.warn(`User not found for profile retrieval: ${req.user.id}`);
 			return sendResponse(res, 404, false, null, "User not found");
+		}
+		if (!user.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to access your profile."
+			);
 		}
 		logger.info(`User profile retrieved: ${req.user.id}`);
 		return sendResponse(res, 200, true, user, "User profile retrieved");
@@ -296,9 +306,24 @@ export const getUserProfile = async (req, res) => {
 	}
 };
 
-// Update user profile
+// Update user profile (requires verified email)
 export const updateUserProfile = async (req, res) => {
 	try {
+		const existingUser = await User.findById(req.user.id);
+		if (!existingUser) {
+			logger.warn(`User not found for update: ${req.user.id}`);
+			return sendResponse(res, 404, false, null, "User not found");
+		}
+		if (!existingUser.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to update your profile."
+			);
+		}
+
 		const allowedFields = [
 			"name",
 			"email",
@@ -317,7 +342,7 @@ export const updateUserProfile = async (req, res) => {
 			new: true,
 		});
 		if (!user) {
-			authLogger.warn(`User not found for update: ${req.user.id}`);
+			logger.warn(`User not found for update: ${req.user.id}`);
 			return sendResponse(res, 404, false, null, "User not found");
 		}
 		logger.info(`User profile updated: ${req.user.id}`);
@@ -340,12 +365,25 @@ export const updateUserProfile = async (req, res) => {
 	}
 };
 
-// Delete user account
+// Delete user account (requires verified email)
 export const deleteUserAccount = async (req, res) => {
 	try {
+		const existingUser = await User.findById(req.user.id);
+		if (!existingUser) {
+			logger.warn(`User not found for deletion: ${req.user.id}`);
+			return sendResponse(res, 404, false, null, "User not found");
+		}
+		if (!existingUser.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to delete your account."
+			);
+		}
 		await User.findByIdAndDelete(req.user.id);
 		logger.info(`User account deleted: ${req.user.id}`);
-		signale.success(`User account ${req.user.id} deleted successfully.`);
 		return sendResponse(
 			res,
 			200,

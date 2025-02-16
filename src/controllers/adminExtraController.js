@@ -1,15 +1,16 @@
-// src/controllers/userExtraController.js
+// src/controllers/adminExtraController.js
 
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import _ from "lodash";
-import User from "../models/User.js";
+import Admin from "../models/Admin.js";
 import { sendResponse } from "../utils/helpers.js";
 import {
-	sendUserVerificationEmail,
-	sendUserResetPasswordEmail,
-	sendUserTwoFactorOTPEmail,
+	sendAdminVerificationEmail,
+	sendAdminResetPasswordEmail,
+	sendAdminTwoFactorOTPEmail,
 } from "../services/emailService.js";
+import { generateAdminToken } from "../services/tokenServices.js";
 
 // Use only the Winston logger
 import logger from "../utils/logger.js";
@@ -20,7 +21,7 @@ const generateToken = () => crypto.randomBytes(20).toString("hex");
 // ============
 // Verify Email
 // ============
-// GET /api/v1/auth/verify-email?token=XYZ
+// GET /api/v{version}/admin/verify-email?token=XYZ
 export const verifyEmail = async (req, res) => {
 	try {
 		const { token } = req.query;
@@ -29,13 +30,13 @@ export const verifyEmail = async (req, res) => {
 			return sendResponse(res, 400, false, null, "Token is required");
 		}
 
-		// Find the user with a matching, unexpired verification token
-		const user = await User.findOne({
+		// Find the admin with a matching, unexpired verification token
+		const admin = await Admin.findOne({
 			emailVerificationToken: token,
 			emailVerificationExpires: { $gt: Date.now() },
 		});
 
-		if (!user) {
+		if (!admin) {
 			logger.warn(`Invalid or expired token: ${token}`);
 			return sendResponse(
 				res,
@@ -46,12 +47,12 @@ export const verifyEmail = async (req, res) => {
 			);
 		}
 
-		user.isVerified = true;
-		user.emailVerificationToken = undefined;
-		user.emailVerificationExpires = undefined;
-		await user.save();
+		admin.isVerified = true;
+		admin.emailVerificationToken = undefined;
+		admin.emailVerificationExpires = undefined;
+		await admin.save();
 
-		logger.info(`Email verified for user: ${user._id}`);
+		logger.info(`Email verified for admin: ${admin._id}`);
 		return sendResponse(
 			res,
 			200,
@@ -65,7 +66,7 @@ export const verifyEmail = async (req, res) => {
 	}
 };
 
-// POST /api/v1/auth/resend-verification
+// POST /api/v{version}/admin/resend-verification
 export const resendVerificationEmail = async (req, res) => {
 	try {
 		const { email } = req.body;
@@ -74,16 +75,16 @@ export const resendVerificationEmail = async (req, res) => {
 			return sendResponse(res, 400, false, null, "Email is required");
 		}
 
-		const user = await User.findOne({ email });
-		if (!user) {
+		const admin = await Admin.findOne({ email });
+		if (!admin) {
 			logger.warn(
-				`Resend verification failed: User not found (${email})`
+				`Resend verification failed: Admin not found (${email})`
 			);
-			return sendResponse(res, 400, false, null, "User not found");
+			return sendResponse(res, 400, false, null, "Admin not found");
 		}
-		if (user.isVerified) {
+		if (admin.isVerified) {
 			logger.info(
-				`User ${email} already verified; no need to resend email.`
+				`Admin ${email} already verified; no need to resend email.`
 			);
 			return sendResponse(
 				res,
@@ -96,13 +97,13 @@ export const resendVerificationEmail = async (req, res) => {
 
 		// Generate new verification token (expires in 24 hours)
 		const token = generateToken();
-		user.emailVerificationToken = token;
-		user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
-		await user.save();
+		admin.emailVerificationToken = token;
+		admin.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+		await admin.save();
 
-		await sendUserVerificationEmail(user.email, token);
+		await sendAdminVerificationEmail(admin.email, token);
 
-		logger.info(`Resent verification email to user: ${user._id}`);
+		logger.info(`Resent verification email to admin: ${admin._id}`);
 		return sendResponse(res, 200, true, null, "Verification email sent");
 	} catch (err) {
 		logger.error(`Error in resendVerificationEmail: ${err.message}`);
@@ -114,7 +115,7 @@ export const resendVerificationEmail = async (req, res) => {
 // Forgot Password & Reset
 // ======================
 
-// POST /api/v1/auth/forgot-password
+// POST /api/v{version}/admin/forgot-password
 export const forgotPassword = async (req, res) => {
 	try {
 		const { email } = req.body;
@@ -123,21 +124,21 @@ export const forgotPassword = async (req, res) => {
 			return sendResponse(res, 400, false, null, "Email is required");
 		}
 
-		const user = await User.findOne({ email });
-		if (!user) {
-			logger.warn(`Forgot password: User not found for email ${email}`);
-			return sendResponse(res, 400, false, null, "User not found");
+		const admin = await Admin.findOne({ email });
+		if (!admin) {
+			logger.warn(`Forgot password: Admin not found for email ${email}`);
+			return sendResponse(res, 400, false, null, "Admin not found");
 		}
 
 		// Generate reset token (expires in 1 hour)
 		const token = generateToken();
-		user.forgotPasswordToken = token;
-		user.forgotPasswordExpires = Date.now() + 60 * 60 * 1000;
-		await user.save();
+		admin.forgotPasswordToken = token;
+		admin.forgotPasswordExpires = Date.now() + 60 * 60 * 1000;
+		await admin.save();
 
-		await sendUserResetPasswordEmail(user.email, token);
+		await sendAdminResetPasswordEmail(admin.email, token);
 
-		logger.info(`Password reset email sent for user: ${user._id}`);
+		logger.info(`Password reset email sent for admin: ${admin._id}`);
 		return sendResponse(res, 200, true, null, "Password reset email sent");
 	} catch (err) {
 		logger.error(`Error in forgotPassword: ${err.message}`);
@@ -145,7 +146,7 @@ export const forgotPassword = async (req, res) => {
 	}
 };
 
-// POST /api/v1/auth/reset-password
+// POST /api/v{version}/admin/reset-password
 export const resetPassword = async (req, res) => {
 	try {
 		const allowedFields = ["token", "newPassword", "confirmPassword"];
@@ -173,11 +174,11 @@ export const resetPassword = async (req, res) => {
 			);
 		}
 
-		const user = await User.findOne({
+		const admin = await Admin.findOne({
 			forgotPasswordToken: data.token,
 			forgotPasswordExpires: { $gt: Date.now() },
 		});
-		if (!user) {
+		if (!admin) {
 			logger.warn(
 				`Reset password failed: Invalid or expired token (${data.token})`
 			);
@@ -191,12 +192,12 @@ export const resetPassword = async (req, res) => {
 		}
 
 		const salt = await bcrypt.genSalt(10);
-		user.password = await bcrypt.hash(data.newPassword, salt);
-		user.forgotPasswordToken = undefined;
-		user.forgotPasswordExpires = undefined;
-		await user.save();
+		admin.password = await bcrypt.hash(data.newPassword, salt);
+		admin.forgotPasswordToken = undefined;
+		admin.forgotPasswordExpires = undefined;
+		await admin.save();
 
-		logger.info(`Password reset successful for user: ${user._id}`);
+		logger.info(`Password reset successful for admin: ${admin._id}`);
 		return sendResponse(res, 200, true, null, "Password reset successful");
 	} catch (err) {
 		logger.error(`Error in resetPassword: ${err.message}`);
@@ -208,7 +209,7 @@ export const resetPassword = async (req, res) => {
 // Two-Factor Authentication (OTP)
 // ===========================
 
-// POST /api/v1/auth/send-otp
+// POST /api/v{version}/admin/send-otp
 export const sendTwoFactorOTP = async (req, res) => {
 	try {
 		const { email } = req.body;
@@ -217,21 +218,21 @@ export const sendTwoFactorOTP = async (req, res) => {
 			return sendResponse(res, 400, false, null, "Email is required");
 		}
 
-		const user = await User.findOne({ email });
-		if (!user) {
-			logger.warn(`Send OTP: User not found for email ${email}`);
-			return sendResponse(res, 400, false, null, "User not found");
+		const admin = await Admin.findOne({ email });
+		if (!admin) {
+			logger.warn(`Send OTP: Admin not found for email ${email}`);
+			return sendResponse(res, 400, false, null, "Admin not found");
 		}
 
 		// Generate a 6-digit OTP that expires in 5 minutes
 		const otp = Math.floor(100000 + Math.random() * 900000).toString();
-		user.twoFactorOTP = otp;
-		user.twoFactorOTPExpires = Date.now() + 5 * 60 * 1000;
-		await user.save();
+		admin.twoFactorOTP = otp;
+		admin.twoFactorOTPExpires = Date.now() + 5 * 60 * 1000;
+		await admin.save();
 
-		await sendUserTwoFactorOTPEmail(user.email, otp);
+		await sendAdminTwoFactorOTPEmail(admin.email, otp);
 
-		logger.info(`OTP sent for 2FA to user: ${user._id}`);
+		logger.info(`OTP sent for 2FA to admin: ${admin._id}`);
 		return sendResponse(res, 200, true, null, "OTP sent to email");
 	} catch (err) {
 		logger.error(`Error in sendTwoFactorOTP: ${err.message}`);
@@ -239,7 +240,7 @@ export const sendTwoFactorOTP = async (req, res) => {
 	}
 };
 
-// POST /api/v1/auth/verify-otp
+// POST /api/v{version}/admin/verify-otp
 export const verifyTwoFactorOTP = async (req, res) => {
 	try {
 		const { email, otp } = req.body;
@@ -253,11 +254,11 @@ export const verifyTwoFactorOTP = async (req, res) => {
 				"Email and OTP are required"
 			);
 		}
-		const user = await User.findOne({ email });
+		const admin = await Admin.findOne({ email });
 		if (
-			!user ||
-			!user.twoFactorOTP ||
-			user.twoFactorOTPExpires < Date.now()
+			!admin ||
+			!admin.twoFactorOTP ||
+			admin.twoFactorOTPExpires < Date.now()
 		) {
 			logger.warn(
 				`Verify OTP failed: OTP invalid or expired for ${email}`
@@ -270,28 +271,28 @@ export const verifyTwoFactorOTP = async (req, res) => {
 				"OTP is invalid or expired"
 			);
 		}
-		if (user.twoFactorOTP !== otp) {
+		if (admin.twoFactorOTP !== otp) {
 			logger.warn(
 				`Verify OTP failed: Provided OTP does not match for ${email}`
 			);
 			return sendResponse(res, 400, false, null, "OTP does not match");
 		}
 		// Clear OTP after successful verification
-		user.twoFactorOTP = undefined;
-		user.twoFactorOTPExpires = undefined;
-		await user.save();
+		admin.twoFactorOTP = undefined;
+		admin.twoFactorOTPExpires = undefined;
+		await admin.save();
 
 		// NEW: Generate JWT token and set it in cookies
-		const token = generateUserToken({ id: user._id, email: user.email });
+		const token = generateAdminToken({ id: admin._id, email: admin.email });
 		const cookieOptions = {
 			httpOnly: true,
 			secure: process.env.NODE_ENV === "production",
 			sameSite: "strict",
 			maxAge: 60 * 60 * 1000, // 1 hour
 		};
-		res.cookie("user-token", token, cookieOptions);
+		res.cookie("admin-token", token, cookieOptions);
 
-		logger.info(`OTP verified for user: ${user._id} and token issued`);
+		logger.info(`OTP verified for admin: ${admin._id} and token issued`);
 		return sendResponse(
 			res,
 			200,
@@ -308,24 +309,24 @@ export const verifyTwoFactorOTP = async (req, res) => {
 // ------------------------------
 // Get Verification Status
 // ------------------------------
-// GET /api/v1/auth/verification-status
+// GET /api/v{version}/admin/verification-status
 export const getVerificationStatus = async (req, res) => {
 	try {
-		// Assumes req.user is set by an authentication middleware
-		const user = await User.findById(req.user.id);
-		if (!user) {
+		// Assumes req.admin is set by an authentication middleware
+		const admin = await Admin.findById(req.admin.id);
+		if (!admin) {
 			logger.warn(
-				`User not found for verification status: ${req.user.id}`
+				`Admin not found for verification status: ${req.admin.id}`
 			);
-			return sendResponse(res, 404, false, null, "User not found");
+			return sendResponse(res, 404, false, null, "Admin not found");
 		}
 		const status = {
-			verified: user.isVerified,
-			message: user.isVerified
+			verified: admin.isVerified,
+			message: admin.isVerified
 				? "Email is verified"
 				: "Email is not verified. Please verify your email.",
 		};
-		logger.info(`Verification status retrieved for user: ${user._id}`);
+		logger.info(`Verification status retrieved for admin: ${admin._id}`);
 		return sendResponse(
 			res,
 			200,
@@ -339,20 +340,22 @@ export const getVerificationStatus = async (req, res) => {
 	}
 };
 
-// Enable two-factor authentication for user
+// Enable two-factor authentication for admin
 export const enableTwoFactorAuth = async (req, res) => {
 	try {
-		// Assume req.user is set by your user authentication middleware
-		const user = await User.findById(req.user.id);
-		if (!user) {
+		// Assume req.admin is set by your admin authentication middleware
+		const admin = await Admin.findById(req.admin.id);
+		if (!admin) {
 			logger.warn(
-				`User not found for enabling two-factor: ${req.user.id}`
+				`Admin not found for enabling two-factor: ${req.admin.id}`
 			);
-			return sendResponse(res, 404, false, null, "User not found");
+			return sendResponse(res, 404, false, null, "Admin not found");
 		}
-		user.twoFactorEnabled = true;
-		await user.save();
-		logger.info(`Two-factor authentication enabled for user: ${user._id}`);
+		admin.twoFactorEnabled = true;
+		await admin.save();
+		logger.info(
+			`Two-factor authentication enabled for admin: ${admin._id}`
+		);
 		return sendResponse(
 			res,
 			200,
@@ -366,19 +369,21 @@ export const enableTwoFactorAuth = async (req, res) => {
 	}
 };
 
-// Disable two-factor authentication for user
+// Disable two-factor authentication for admin
 export const disableTwoFactorAuth = async (req, res) => {
 	try {
-		const user = await User.findById(req.user.id);
-		if (!user) {
+		const admin = await Admin.findById(req.admin.id);
+		if (!admin) {
 			logger.warn(
-				`User not found for disabling two-factor: ${req.user.id}`
+				`Admin not found for disabling two-factor: ${req.admin.id}`
 			);
-			return sendResponse(res, 404, false, null, "User not found");
+			return sendResponse(res, 404, false, null, "Admin not found");
 		}
-		user.twoFactorEnabled = false;
-		await user.save();
-		logger.info(`Two-factor authentication disabled for user: ${user._id}`);
+		admin.twoFactorEnabled = false;
+		await admin.save();
+		logger.info(
+			`Two-factor authentication disabled for admin: ${admin._id}`
+		);
 		return sendResponse(
 			res,
 			200,

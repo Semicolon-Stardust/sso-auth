@@ -19,10 +19,6 @@ const adminSchema = new mongoose.Schema(
 			required: [true, "Password is required"],
 		},
 		// "confirmPassword" is not stored; it’s only for validation on registration.
-		isAdmin: {
-			type: Boolean,
-			default: true,
-		},
 		adminKey: {
 			type: String,
 			// Compare with process.env.ADMIN_KEY in the controller.
@@ -106,6 +102,21 @@ const adminSchema = new mongoose.Schema(
 		emergencyRecoveryContact: {
 			type: String,
 		},
+		// Extra fields for email verification, password reset and two-factor authentication
+		isVerified: {
+			type: Boolean,
+			default: false,
+		},
+		emailVerificationToken: String,
+		emailVerificationExpires: Date,
+		forgotPasswordToken: String,
+		forgotPasswordExpires: Date,
+		twoFactorEnabled: {
+			type: Boolean,
+			default: false,
+		},
+		twoFactorOTP: String,
+		twoFactorOTPExpires: Date,
 	},
 	{ timestamps: true, collection: "admins" }
 );

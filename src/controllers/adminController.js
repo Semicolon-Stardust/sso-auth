@@ -3,18 +3,21 @@
 import bcrypt from "bcryptjs";
 import _ from "lodash";
 import { z } from "zod";
+import crypto from "crypto"; // NEW: to generate verification token
 import Admin from "../models/Admin.js";
 import Session from "../models/Session.js";
-import { generateToken, verifyToken } from "../services/tokenServices.js";
+import {
+	generateAdminToken,
+	verifyAdminToken,
+} from "../services/tokenServices.js";
 import { sendResponse, formatError } from "../utils/helpers.js";
+import {
+	sendAdminVerificationEmail,
+	sendAdminTwoFactorOTPEmail,
+} from "../services/emailService.js"; // NEW: to send email
 
-// Import loggers
-import logger from "../utils/logger.js"; // Winston logger
-import pinoLogger from "../utils/pinoLogger.js"; // Pino logger
-import bunyanLogger from "../utils/bunyanLogger.js"; // Bunyan logger
-import { authLogger } from "../utils/log4jsConfig.js"; // Log4js logger for authentication flows
-import signale from "../utils/signaleLogger.js"; // Signale for development logs
-import tracerLogger from "../utils/tracerLogger.js"; // Tracer for function call tracing
+// Use only one logger (Winston)
+import logger from "../utils/logger.js";
 
 // ------------------------------
 // Zod Schemas for Admin Actions
@@ -22,15 +25,18 @@ import tracerLogger from "../utils/tracerLogger.js"; // Tracer for function call
 
 const adminRegisterSchema = z.object({
 	name: z.string().min(1, { message: "Name is required" }),
-	email: z.string().email({ message: "Invalid email format" }),
+	email: z
+		.string()
+		.email({ message: "Invalid email format" })
+		.refine((val) => val.endsWith("@dayadevraha.com"), {
+			message: "Admin email must be a @dayadevraha.com email",
+		}),
 	password: z
 		.string()
 		.min(6, { message: "Password must be at least 6 characters long" }),
-	confirmPassword: z
-		.string()
-		.min(6, {
-			message: "Confirm password must be at least 6 characters long",
-		}),
+	confirmPassword: z.string().min(6, {
+		message: "Confirm password must be at least 6 characters long",
+	}),
 	adminKey: z.string().min(1, { message: "Admin key is required" }),
 	role: z.enum(["Admin", "Super Admin", "Moderator"]),
 	permissions: z.array(z.string()).optional(),
@@ -50,11 +56,6 @@ const adminRegisterSchema = z.object({
 	canPromoteDemoteAdmins: z.boolean().optional(),
 	canModifyAdminPermissions: z.boolean().optional(),
 	canOverrideSecuritySettings: z.boolean().optional(),
-});
-
-const adminLoginSchema = z.object({
-	email: z.string().email({ message: "Invalid email format" }),
-	password: z.string().min(1, { message: "Password is required" }),
 });
 
 // Helper to extract session data
@@ -89,9 +90,7 @@ export const registerAdmin = async (req, res) => {
 
 		// Check if passwords match
 		if (parsedData.password !== parsedData.confirmPassword) {
-			authLogger.warn(
-				"Admin registration failed: Passwords do not match."
-			);
+			logger.warn("Admin registration failed: Passwords do not match.");
 			return sendResponse(
 				res,
 				400,
@@ -100,7 +99,6 @@ export const registerAdmin = async (req, res) => {
 				"Passwords do not match"
 			);
 		}
-		// Remove confirmPassword from parsed data
 		delete parsedData.confirmPassword;
 
 		// Validate admin key
@@ -108,14 +106,14 @@ export const registerAdmin = async (req, res) => {
 			parsedData.role !== "Super Admin" &&
 			parsedData.adminKey !== process.env.ADMIN_KEY
 		) {
-			authLogger.warn(`Invalid admin key for ${parsedData.email}`);
+			logger.warn(`Invalid admin key for ${parsedData.email}`);
 			return sendResponse(res, 401, false, null, "Invalid admin key");
 		}
 		if (
 			parsedData.role === "Super Admin" &&
 			parsedData.superAdminKey !== process.env.SUPER_ADMIN_KEY
 		) {
-			authLogger.warn(`Invalid super admin key for ${parsedData.email}`);
+			logger.warn(`Invalid super admin key for ${parsedData.email}`);
 			return sendResponse(
 				res,
 				401,
@@ -128,9 +126,7 @@ export const registerAdmin = async (req, res) => {
 		// Check if admin exists
 		let admin = await Admin.findOne({ email: parsedData.email });
 		if (admin) {
-			authLogger.warn(
-				`Admin with email ${parsedData.email} already exists.`
-			);
+			logger.warn(`Admin with email ${parsedData.email} already exists.`);
 			return sendResponse(res, 400, false, null, "Admin already exists");
 		}
 
@@ -138,14 +134,21 @@ export const registerAdmin = async (req, res) => {
 		const salt = await bcrypt.genSalt(10);
 		parsedData.password = await bcrypt.hash(parsedData.password, salt);
 
-		// Create admin
+		// Create admin (email remains unverified by default)
 		admin = await Admin.create(parsedData);
 
-		// Generate token and set cookie
-		const token = generateToken({
+		// --- NEW: Generate verification token, update admin, and send verification email ---
+		const verificationToken = crypto.randomBytes(20).toString("hex");
+		admin.emailVerificationToken = verificationToken;
+		admin.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours expiry
+		await admin.save();
+		await sendAdminVerificationEmail(admin.email, verificationToken);
+		// -----------------------------------------------------------------------------
+
+		// Generate JWT token for login
+		const token = generateAdminToken({
 			id: admin._id,
 			email: admin.email,
-			isAdmin: admin.isAdmin,
 		});
 		const cookieOptions = {
 			httpOnly: true,
@@ -153,7 +156,7 @@ export const registerAdmin = async (req, res) => {
 			sameSite: "strict",
 			maxAge: 60 * 60 * 1000,
 		};
-		res.cookie("token", token, cookieOptions);
+		res.cookie("admin-token", token, cookieOptions);
 
 		// Create a session record
 		await Session.create({
@@ -162,15 +165,7 @@ export const registerAdmin = async (req, res) => {
 			...getSessionData(req, token),
 		});
 
-		// Logging messages
 		logger.info(`Admin registered: ${admin._id}`);
-		pinoLogger.info({ adminId: admin._id }, "Pino: New admin registered");
-		bunyanLogger.info(
-			{ adminId: admin._id },
-			"Admin registration successful"
-		);
-		signale.success(`Admin ${admin.email} registered successfully.`);
-		tracerLogger.trace(`registerAdmin executed for admin ${admin._id}`);
 
 		return sendResponse(
 			res,
@@ -184,11 +179,11 @@ export const registerAdmin = async (req, res) => {
 				"accessLevel",
 				"permissions",
 			]),
-			"Admin registered successfully"
+			"Admin registered successfully. Please verify your email."
 		);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
-			authLogger.error("Validation error during admin registration.");
+			logger.error("Validation error during admin registration.");
 			return res
 				.status(400)
 				.json({ success: false, errors: formatError(err.errors) });
@@ -202,12 +197,17 @@ export const registerAdmin = async (req, res) => {
 export const loginAdmin = async (req, res) => {
 	try {
 		const credentials = _.pick(req.body, ["email", "password"]);
-		const parsedCreds = adminLoginSchema.parse(credentials);
+		const parsedCreds = z
+			.object({
+				email: z.string().email({ message: "Invalid email format" }),
+				password: z
+					.string()
+					.min(1, { message: "Password is required" }),
+			})
+			.parse(credentials);
 		const admin = await Admin.findOne({ email: parsedCreds.email });
 		if (!admin) {
-			authLogger.warn(
-				`Admin login failed: ${parsedCreds.email} not found.`
-			);
+			logger.warn(`Admin login failed: ${parsedCreds.email} not found.`);
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 		const isMatch = await bcrypt.compare(
@@ -215,24 +215,38 @@ export const loginAdmin = async (req, res) => {
 			admin.password
 		);
 		if (!isMatch) {
-			authLogger.warn(
+			logger.warn(
 				`Admin login failed: Incorrect password for ${parsedCreds.email}`
 			);
 			return sendResponse(res, 401, false, null, "Invalid credentials");
 		}
 
-		const token = generateToken({
-			id: admin._id,
-			email: admin.email,
-			isAdmin: admin.isAdmin,
-		});
+		// If admin has enabled two-factor auth, send OTP and do not complete login.
+		if (admin.twoFactorEnabled) {
+			const otp = Math.floor(100000 + Math.random() * 900000).toString();
+			admin.twoFactorOTP = otp;
+			admin.twoFactorOTPExpires = Date.now() + 5 * 60 * 1000;
+			await admin.save();
+			await sendAdminTwoFactorOTPEmail(admin.email, otp);
+			logger.info(`2FA OTP sent for admin: ${admin._id}`);
+			return sendResponse(
+				res,
+				200,
+				true,
+				{ twoFactorRequired: true },
+				"OTP sent, please verify your login via the two-factor endpoint."
+			);
+		}
+
+		// If 2FA is not enabled, complete login.
+		const token = generateAdminToken({ id: admin._id, email: admin.email });
 		const cookieOptions = {
 			httpOnly: true,
 			secure: process.env.NODE_ENV === "production",
 			sameSite: "strict",
 			maxAge: 60 * 60 * 1000,
 		};
-		res.cookie("token", token, cookieOptions);
+		res.cookie("admin-token", token, cookieOptions);
 
 		await Session.create({
 			user: admin._id,
@@ -241,11 +255,6 @@ export const loginAdmin = async (req, res) => {
 		});
 
 		logger.info(`Admin logged in: ${admin._id}`);
-		pinoLogger.info({ adminId: admin._id }, "Pino: Admin logged in");
-		bunyanLogger.info({ adminId: admin._id }, "Admin login successful");
-		signale.success(`Admin ${admin.email} logged in successfully.`);
-		tracerLogger.trace(`loginAdmin executed for admin ${admin._id}`);
-
 		return sendResponse(
 			res,
 			200,
@@ -262,7 +271,7 @@ export const loginAdmin = async (req, res) => {
 		);
 	} catch (err) {
 		if (err instanceof z.ZodError) {
-			authLogger.error("Validation error during admin login.");
+			logger.error("Validation error during admin login.");
 			return res
 				.status(400)
 				.json({ success: false, errors: formatError(err.errors) });
@@ -276,8 +285,8 @@ export const loginAdmin = async (req, res) => {
 export const validateAdminToken = async (req, res) => {
 	try {
 		let token;
-		if (req.cookies && req.cookies.token) {
-			token = req.cookies.token;
+		if (req.cookies && req.cookies["admin-token"]) {
+			token = req.cookies["admin-token"];
 		} else if (
 			req.headers.authorization &&
 			req.headers.authorization.startsWith("Bearer ")
@@ -285,19 +294,15 @@ export const validateAdminToken = async (req, res) => {
 			token = req.headers.authorization.split(" ")[1];
 		}
 		if (!token) {
-			authLogger.warn("No token provided for admin validation.");
+			logger.warn("No token provided for admin validation.");
 			return sendResponse(res, 401, false, null, "No token provided");
 		}
-		const decoded = verifyToken(token);
+		const decoded = verifyAdminToken(token);
 		if (!decoded) {
-			authLogger.warn("Invalid admin token provided.");
+			logger.warn("Invalid admin token provided.");
 			return sendResponse(res, 401, false, null, "Invalid token");
 		}
 		logger.info(`Admin token validated: ${decoded.id}`);
-		pinoLogger.info({ adminId: decoded.id }, "Pino: Admin token validated");
-		bunyanLogger.info({ adminId: decoded.id }, "Admin token is valid");
-		signale.success("Admin token is valid");
-		tracerLogger.trace("validateAdminToken executed");
 
 		return sendResponse(res, 200, true, decoded, "Token is valid");
 	} catch (err) {
@@ -309,15 +314,9 @@ export const validateAdminToken = async (req, res) => {
 // Logout admin
 export const logoutAdmin = async (req, res) => {
 	try {
-		res.clearCookie("token");
+		res.clearCookie("admin-token");
 		logger.info(
-			`Admin logged out: ${req.user ? req.user.id : "unknown admin"}`
-		);
-		signale.success("Admin logged out successfully.");
-		tracerLogger.trace(
-			`logoutAdmin executed for admin ${
-				req.user ? req.user.id : "unknown"
-			}`
+			`Admin logged out: ${req.admin ? req.admin.id : "unknown admin"}`
 		);
 		return sendResponse(res, 200, true, null, "Logged out successfully");
 	} catch (err) {
@@ -326,17 +325,26 @@ export const logoutAdmin = async (req, res) => {
 	}
 };
 
-// Retrieve admin profile
+// Retrieve admin profile (requires verified email)
 export const getAdminProfile = async (req, res) => {
 	try {
-		const admin = await Admin.findById(req.user.id).select("-password");
+		const admin = await Admin.findById(req.admin.id).select("-password");
 		if (!admin) {
-			authLogger.warn(
-				`Admin not found for profile retrieval: ${req.user.id}`
+			logger.warn(
+				`Admin not found for profile retrieval: ${req.admin.id}`
 			);
 			return sendResponse(res, 404, false, null, "Admin not found");
 		}
-		logger.info(`Admin profile retrieved: ${req.user.id}`);
+		if (!admin.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to access your profile."
+			);
+		}
+		logger.info(`Admin profile retrieved: ${req.admin.id}`);
 		return sendResponse(res, 200, true, admin, "Admin profile retrieved");
 	} catch (err) {
 		logger.error(`Error in getAdminProfile: ${err.message}`);
@@ -344,9 +352,24 @@ export const getAdminProfile = async (req, res) => {
 	}
 };
 
-// Update admin profile
+// Update admin profile (requires verified email)
 export const updateAdminProfile = async (req, res) => {
 	try {
+		const existingAdmin = await Admin.findById(req.admin.id);
+		if (!existingAdmin) {
+			logger.warn(`Admin not found for update: ${req.admin.id}`);
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		if (!existingAdmin.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to update your profile."
+			);
+		}
+
 		const allowedFields = [
 			"name",
 			"email",
@@ -362,14 +385,14 @@ export const updateAdminProfile = async (req, res) => {
 			const salt = await bcrypt.genSalt(10);
 			updateData.password = await bcrypt.hash(updateData.password, salt);
 		}
-		const admin = await Admin.findByIdAndUpdate(req.user.id, updateData, {
+		const admin = await Admin.findByIdAndUpdate(req.admin.id, updateData, {
 			new: true,
 		});
 		if (!admin) {
-			authLogger.warn(`Admin not found for update: ${req.user.id}`);
+			logger.warn(`Admin not found for update: ${req.admin.id}`);
 			return sendResponse(res, 404, false, null, "Admin not found");
 		}
-		logger.info(`Admin profile updated: ${req.user.id}`);
+		logger.info(`Admin profile updated: ${req.admin.id}`);
 		return sendResponse(
 			res,
 			200,
@@ -390,12 +413,25 @@ export const updateAdminProfile = async (req, res) => {
 	}
 };
 
-// Delete admin account
+// Delete admin account (requires verified email)
 export const deleteAdminAccount = async (req, res) => {
 	try {
-		await Admin.findByIdAndDelete(req.user.id);
-		logger.info(`Admin account deleted: ${req.user.id}`);
-		signale.success(`Admin account ${req.user.id} deleted successfully.`);
+		const existingAdmin = await Admin.findById(req.admin.id);
+		if (!existingAdmin) {
+			logger.warn(`Admin not found for deletion: ${req.admin.id}`);
+			return sendResponse(res, 404, false, null, "Admin not found");
+		}
+		if (!existingAdmin.isVerified) {
+			return sendResponse(
+				res,
+				403,
+				false,
+				null,
+				"Your email is not verified. Please verify your email to delete your account."
+			);
+		}
+		await Admin.findByIdAndDelete(req.admin.id);
+		logger.info(`Admin account deleted: ${req.admin.id}`);
 		return sendResponse(
 			res,
 			200,
